@@ -107,6 +107,8 @@ int sem_init(sem_t* sem, int pshared, unsigned int value) {
     return -1;
   }
 
+  sem->named = 0;
+
   unsigned int count = SEMCOUNT_FROM_VALUE(value);
   if (pshared != 0) {
     count |= SEMCOUNT_SHARED_MASK;
@@ -117,13 +119,58 @@ int sem_init(sem_t* sem, int pshared, unsigned int value) {
   return 0;
 }
 
-int sem_destroy(sem_t*) {
+int sem_destroy(sem_t* sem) {
+
+  if (sem && sem->named) {
+    shm_unlink(sem->name);
+    munmap(sem, sizeof(sem_t));
+  }
+  
   return 0;
 }
 
-sem_t* sem_open(const char*, int, ...) {
-  errno = ENOSYS;
-  return SEM_FAILED;
+sem_t* sem_open(const char* name, int oflag, ...) {
+    mode_t mode = 0666;
+    unsigned int value = 0;
+    if (oflag & O_CREAT) {
+        va_list args;
+        va_start(args, oflag);
+        mode = va_arg(args, mode_t);
+        value = va_arg(args, unsigned int);
+        va_end(args);
+    }
+
+    int shm_fd = shm_open(name, oflag | O_CREAT, mode);
+    if (shm_fd == -1) {
+        return SEM_FAILED;
+    }
+
+    if (ftruncate(shm_fd, sizeof(sem_t)) == -1) {
+        close(shm_fd);
+        return SEM_FAILED;
+    }
+
+    sem_t* sem = (sem_t*)mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (sem == MAP_FAILED) {
+        close(shm_fd);
+        return SEM_FAILED;
+    }
+
+    strncpy(sem->name, name, NAME_MAX);
+    
+    if (oflag & O_CREAT) {
+        if (sem_init(sem, 1, value) == -1) {
+	    sem->named = 1;
+            munmap(sem, sizeof(sem_t));
+            close(shm_fd);
+            return SEM_FAILED;
+        }
+    }
+
+    sem->named = 1;
+    close(shm_fd);
+    
+    return sem;
 }
 
 int sem_close(sem_t*) {

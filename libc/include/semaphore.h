@@ -38,6 +38,10 @@ struct timespec;
 
 typedef struct {
   unsigned int count;
+
+  int named;
+  char name[NAME_MAX + 1];
+
 #ifdef __LP64__
   int __reserved[3];
 #endif
